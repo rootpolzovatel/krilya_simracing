@@ -89,6 +89,20 @@ docker compose --env-file .env.host -f compose.host.yml up -d
 
 ### Резервное копирование
 
+В `database-snapshot.7z` находится заполненная база секции. Для распаковки в 7-Zip нужен тот же ключ, что и для архива временных паролей. На компьютере владельца ключ хранится в `.local/github-password-archive.key`. Распакуйте `krylya.dump` в `.local`.
+
+Чтобы восстановить снимок, запустите PostgreSQL и выберите пустую базу. Пример для PowerShell 7 из каталога `platform` создаёт отдельную базу `krylya_restored` и проверяет журнал миграций.
+
+```powershell
+docker compose -p krylya-platform up -d --wait postgres
+docker compose -p krylya-platform exec -T postgres createdb -U krylya -T template0 krylya_restored
+Get-Content .local/krylya.dump -AsByteStream -Raw |
+    docker compose -p krylya-platform exec -T postgres pg_restore --exit-on-error --no-owner --no-acl -U krylya -d krylya_restored
+docker compose -p krylya-platform exec -T postgres psql -U krylya -d krylya_restored -c 'SELECT count(*) FROM "__EFMigrationsHistory"'
+```
+
+Перед запуском API укажите `Database=krylya_restored` в строке подключения. Примените доступные миграции командой `--migrate` под ролью развёртывания и выдайте права роли приложения по инструкции локального запуска, заменив в команде с `ops/runtime-role.sql` параметр `-d krylya` на `-d krylya_restored`.
+
 В Linux-оболочке выгрузите PostgreSQL в сжатом формате. Храните копию вне сервера с ограниченным доступом. Проверяйте восстановление на отдельной пустой базе.
 
 ```bash
