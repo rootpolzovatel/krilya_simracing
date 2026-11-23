@@ -1,0 +1,6 @@
+.env*
+.local
+**/bin
+**/obj
+**/node_modules
+**/dist
