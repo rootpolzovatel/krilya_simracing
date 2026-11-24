@@ -34,6 +34,10 @@ internal static class AuthEndpoints
         var admin = app.MapGroup("/api/admin").RequireAuthorization("Admin");
         staff.MapGet("/pilots", ListPilotsAsync);
         staff.MapPost("/pilots", CreatePilotAsync);
+        admin.MapGet("/accounts", async (KrylyaDb db, CancellationToken ct) =>
+            await db.Accounts.Where(a => a.Role == Roles.Pilot || a.Role == Roles.Coach)
+                .OrderBy(a => a.Login).Select(a => new { a.Id, a.Login, a.Role, a.Active }).ToListAsync(ct));
+        admin.MapPut("/accounts/{id:guid}/credentials", UpdateCredentialsAsync);
         admin.MapPut("/pilots/{id:guid}/password", ResetPasswordAsync);
         admin.MapPut("/pilots/{id:guid}/publication", async (Guid id, PublicationRequest input, KrylyaDb db,
             TimeProvider clock, ClaimsPrincipal user, CancellationToken ct) =>
@@ -116,6 +120,40 @@ internal static class AuthEndpoints
         }));
     }
 
+    private static async Task<IResult> UpdateCredentialsAsync(Guid id, CredentialsRequest input, KrylyaDb db,
+        IPasswordHasher<Account> hasher, CancellationToken ct)
+    {
+        var login = Normalize(input.Login);
+        if (login.Length < 3)
+            return Results.BadRequest(new { message = "Введите логин длиной от 3 символов." });
+
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(1, hashtext({login}))", ct);
+        var target = db.Accounts.Where(a => a.Id == id && (a.Role == Roles.Pilot || a.Role == Roles.Coach));
+        var account = await target.SingleOrDefaultAsync(ct);
+        if (account is null)
+            return Results.NotFound();
+        if (await db.Accounts.AnyAsync(a => a.Id != id && a.Login == login, ct))
+            return Results.Conflict(new { message = "Логин уже занят." });
+
+        if (input.Password is not null)
+        {
+            var minimum = account.Role == Roles.Coach ? 12 : 8;
+            if (input.Password.Length < minimum || string.IsNullOrWhiteSpace(input.Password))
+                return Results.BadRequest(new { message = $"Введите пароль длиной от {minimum} символов." });
+            var hash = hasher.HashPassword(account, input.Password);
+            await target.ExecuteUpdateAsync(set => set.SetProperty(a => a.Login, login)
+                .SetProperty(a => a.PasswordHash, hash).SetProperty(a => a.SessionVersion, a => a.SessionVersion + 1), ct);
+        }
+        else
+        {
+            await target.Where(a => a.Login != login).ExecuteUpdateAsync(set => set.SetProperty(a => a.Login, login)
+                .SetProperty(a => a.SessionVersion, a => a.SessionVersion + 1), ct);
+        }
+        await transaction.CommitAsync(ct);
+        return Results.NoContent();
+    }
+
     private static async Task<IResult> ResetPasswordAsync(Guid id, PasswordRequest input, KrylyaDb db,
         IPasswordHasher<Account> hasher, CancellationToken ct)
     {
@@ -191,3 +229,6 @@ public sealed record PilotRequest(
 
 public sealed record PublicationRequest(bool PublishName);
 public sealed record PasswordRequest([Required, StringLength(128, MinimumLength = 8)] string Password);
+public sealed record CredentialsRequest(
+    [Required, StringLength(64, MinimumLength = 3)] string Login,
+    [StringLength(128)] string? Password);

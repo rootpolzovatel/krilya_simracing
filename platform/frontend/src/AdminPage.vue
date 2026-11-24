@@ -6,7 +6,7 @@ const tabs = [
   ['challenges', 'Ежемесячные испытания'], ['tasks', 'Учебные испытания'], ['ranks', 'Звания'],
 ]
 const tab = ref('challenges')
-const lists = ref({ challenges: [], tasks: [], ranks: [], pilots: [], stages: [] })
+const lists = ref({ challenges: [], tasks: [], ranks: [], pilots: [], stages: [], accounts: [] })
 const dialog = ref()
 const editing = ref('')
 const input = ref({})
@@ -22,7 +22,7 @@ const selectedPair = ref('')
 const resultTypes = { time: 'Время', points: 'Очки', place: 'Место', manual: 'Ручная проверка' }
 const titles = {
   challenges: 'Создать испытание', tasks: 'Создать задание', ranks: 'Создать звание', images: 'Изображения испытания',
-  vehicles: 'Добавить автомобиль', circuits: 'Добавить трассу', pairs: 'Настроить пару', password: 'Задать новый пароль',
+  vehicles: 'Добавить автомобиль', circuits: 'Добавить трассу', pairs: 'Настроить пару', credentials: 'Изменить данные для входа',
   stage: 'Назвать этап',
 }
 const editTitles = {
@@ -34,12 +34,15 @@ const vehicleName = id => catalog.value.vehicles.find(vehicle => vehicle.id === 
 const circuitName = id => catalog.value.circuits.find(circuit => circuit.id === id)?.label
 const stageNumbers = computed(() => [...new Set(lists.value.tasks.map(task => task.stage))])
 const stageName = number => lists.value.stages.find(stage => stage.number === number)?.title
+const accountsById = computed(() => new Map(lists.value.accounts.map(account => [account.id, account])))
+const coaches = computed(() => lists.value.accounts.filter(account => account.role === 'coach'))
 
 async function refresh() {
-  const [challenges, tasks, ranks, pilots, entries, stages] = await Promise.all([
+  const [challenges, tasks, ranks, pilots, entries, stages, accounts] = await Promise.all([
     request('/admin/challenges'), request('/admin/tasks'), request('/admin/ranks'), request('/staff/pilots'), request('/admin/catalog'), request('/admin/stages'),
+    request('/admin/accounts'),
   ])
-  lists.value = { challenges, tasks, ranks, pilots, stages }
+  lists.value = { challenges, tasks, ranks, pilots, stages, accounts }
   catalog.value = entries
 }
 onMounted(async () => { try { await refresh() } catch (reason) { error.value = reason.message } })
@@ -59,7 +62,7 @@ function open(kind, item) {
     pairs: { simulator: 'Assetto Corsa', vehicleId: '', circuitId: '', rules: '', enabled: true },
     stage: { number: stageNumbers.value[0], title: stageName(stageNumbers.value[0]) ?? '' },
   }
-  input.value = kind === 'images' ? { challenge: item } : kind === 'password' ? { password: '', pilot: item }
+  input.value = kind === 'images' ? { challenge: item } : kind === 'credentials' ? { ...item, password: '' }
     : { ...defaults[kind], ...item }
   if (kind === 'challenges') input.value.month = input.value.month.slice(0, 7)
   dialog.value.showModal()
@@ -83,8 +86,8 @@ async function submit() {
     if (kind === 'challenges') body.month += '-01'
     if (kind === 'ranks' && body.minimumCompletedStage === '') body.minimumCompletedStage = null
     if (kind === 'tasks' && body.pointsPrecision === '') body.pointsPrecision = null
-    if (kind === 'password')
-      await write('PUT', '/admin/pilots/' + id + '/password', { password: body.password })
+    if (kind === 'credentials')
+      await write('PUT', '/admin/accounts/' + id + '/credentials', { login: body.login, password: body.password || null })
     else if (kind === 'stage')
       await write('PUT', '/admin/stages/' + body.number, { title: body.title })
     else {
@@ -93,7 +96,7 @@ async function submit() {
     }
     dialog.value.close()
     input.value = {}
-    notice.value = kind === 'password' ? 'Пароль обновлён. Старые сеансы завершены.' : 'Сохранено.'
+    notice.value = 'Сохранено.'
     try { await refresh() } catch (reason) { error.value = reason.message }
   } catch (reason) { formError.value = reason.message }
   finally { busy.value = false }
@@ -196,17 +199,28 @@ async function togglePublication(pilot) {
     </ul>
   </details>
 
-  <details v-if="tab === 'challenges'" class="panel content-panel">
+  <details class="panel content-panel">
     <summary>Аккаунты учеников и публикация имён</summary>
     <p class="muted">Включайте показ имени и фамилии после оформления согласия на распространение.</p>
     <p v-if="!lists.pilots.length" class="muted">Ученики ещё не добавлены.</p>
     <ul v-else class="management-list">
       <li v-for="pilot in lists.pilots" :key="pilot.id" class="heading-actions">
-        <span>{{ pilot.firstName }} {{ pilot.lastName }}</span>
+        <span>{{ pilot.firstName }} {{ pilot.lastName }} <small class="muted">{{ accountsById.get(pilot.id)?.login }}</small></span>
         <div class="actions">
           <button class="quiet" :disabled="busy" @click="togglePublication(pilot)">{{ pilot.publishName ? 'Скрыть имя' : 'Показать имя' }}</button>
-          <button class="quiet" :disabled="busy" @click="open('password', pilot)">Сменить пароль</button>
+          <button v-if="accountsById.has(pilot.id)" class="quiet" :disabled="busy"
+            @click="open('credentials', { ...accountsById.get(pilot.id), label: pilot.firstName + ' ' + pilot.lastName })">Изменить логин и пароль</button>
         </div>
+      </li>
+    </ul>
+  </details>
+  <details class="panel content-panel">
+    <summary>Аккаунты тренеров</summary>
+    <p v-if="!coaches.length" class="muted">Тренеров пока нет.</p>
+    <ul v-else class="management-list">
+      <li v-for="coach in coaches" :key="coach.id" class="heading-actions">
+        <span>{{ coach.login }} <small v-if="!coach.active" class="muted">Доступ отключён</small></span>
+        <button class="quiet" :disabled="busy" @click="open('credentials', { ...coach, label: coach.login })">Изменить логин и пароль</button>
       </li>
     </ul>
   </details>
@@ -272,9 +286,12 @@ async function togglePublication(pilot) {
         <label>Регламент <textarea v-model.trim="input.rules" rows="4" required maxlength="5000"></textarea></label>
         <label class="check-line"><input v-model="input.enabled" type="checkbox"> Участвует в жеребьёвке</label>
       </template>
-      <template v-else-if="editing === 'password'">
-        <p>{{ input.pilot?.firstName }} {{ input.pilot?.lastName }}</p>
-        <label>Новый пароль <input v-model="input.password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required></label>
+      <template v-else-if="editing === 'credentials'">
+        <p>{{ input.label }}</p>
+        <label>Логин <input v-model.trim="input.login" autocomplete="off" minlength="3" maxlength="64" required></label>
+        <label>Новый пароль <input v-model="input.password" type="password" autocomplete="new-password"
+          :minlength="input.role === 'coach' ? 12 : 8" maxlength="128"></label>
+        <p class="muted small">Оставьте поле пароля пустым, чтобы сохранить текущий пароль. Смена логина или пароля завершает действующие сеансы.</p>
       </template>
       <template v-else-if="editing === 'stage'">
         <label>Этап <select v-model="input.number" @change="input.title = stageName(input.number) ?? ''">

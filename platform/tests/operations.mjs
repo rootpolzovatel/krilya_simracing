@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 
 const base = 'http://127.0.0.1:5096/api'
-async function client(login) {
+async function client(login, password = process.env.Bootstrap__Password) {
   const cookies = new Map()
   let token
   async function call(path, method = 'GET', data, expected = 200) {
@@ -20,7 +20,7 @@ async function client(login) {
   }
   if (login) {
     token = (await call('/auth/csrf')).token
-    await call('/auth/login', 'POST', { login, password: process.env.Bootstrap__Password })
+    await call('/auth/login', 'POST', { login, password })
     token = (await call('/auth/csrf')).token
   }
   return call
@@ -83,14 +83,36 @@ assert.deepEqual((await learner(standings)).standings, [
 ])
 console.log('PASS: private task leaderboard includes only best passing results')
 
-const anotherCoach = await client('test-coach')
+await coach('/admin/accounts', 'GET', undefined, 403)
+const accounts = await admin('/admin/accounts')
+const coachAccount = accounts.find(account => account.role === 'coach')
+const pilotCredentials = '/admin/accounts/' + pilot.id + '/credentials'
+const coachCredentials = '/admin/accounts/' + coachAccount.id + '/credentials'
+await coach(pilotCredentials, 'PUT', { login: 'another-pilot' }, 403)
+await admin(pilotCredentials, 'PUT', { login: ' TEST-COACH ' }, 409)
+await admin(pilotCredentials, 'PUT', { login: ' Nova ' }, 204)
+await learner('/pilot/me', 'GET', undefined, 401)
+const renamedPilot = await client('nova')
+assert.equal((await renamedPilot('/pilot/me')).id, pilot.id)
+assert.equal((await renamedPilot('/pilot/me')).practiceMinutes, 75)
+await admin(coachCredentials, 'PUT', { login: 'trainer', password: 'too-short' }, 400)
+const newCoachPassword = randomUUID()
+await admin(coachCredentials, 'PUT', { login: 'trainer', password: newCoachPassword }, 204)
+await coach('/staff/pilots', 'GET', undefined, 401)
+const renamedCoach = await client('trainer', newCoachPassword)
+assert.equal((await renamedCoach('/auth/me')).id, coachAccount.id)
+for (const login of ['test-coach', 'trainer', 'test-pilot'])
+  await assert.rejects(client(login), /401/)
+console.log('PASS: administrator can rename pilots and change trainer credentials')
+
+const anotherCoach = await client('trainer', newCoachPassword)
 function maintain(login, command) {
   execFileSync('dotnet', [process.env.TEST_API_DLL, command], {
     env: { ...process.env, Bootstrap__Login: login }, stdio: 'pipe'
   })
 }
-maintain('test-coach', '--disable-staff')
-for (const current of [coach, anotherCoach]) await current('/staff/pilots', 'GET', undefined, 401)
+maintain('trainer', '--disable-staff')
+for (const current of [renamedCoach, anotherCoach]) await current('/staff/pilots', 'GET', undefined, 401)
 maintain('test-admin', '--recover-staff')
 await admin('/staff/pilots', 'GET', undefined, 401)
 await (await client('test-admin'))('/staff/pilots')
