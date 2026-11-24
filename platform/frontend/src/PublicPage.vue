@@ -111,7 +111,8 @@ const remaining = computed(() => {
             <p>Период: {{ monthLabel(data.challenge.month) }}. Лучшее время учитывается отдельно для этого испытания.</p></div>
         </details>
       </div>
-      <StandingsTable :standings="data.standings" :title="showStaffStandings ? 'Полный зачёт для тренеров' : 'Результаты пилотов'" searchable />
+      <StandingsTable :standings="data.standings" :instructor-lap="data.instructorLapMilliseconds"
+        :title="showStaffStandings ? 'Полный зачёт для тренеров' : 'Результаты пилотов'" searchable />
     </template>
     <template v-else-if="Array.isArray(data) && data.length">
       <div class="archive-grid">

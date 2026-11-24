@@ -11,6 +11,7 @@ const tabs = [
 const tab = ref('schedule')
 const pilots = ref([])
 const bookings = ref([])
+const currentLessonIds = ref([])
 const competition = ref(null)
 const selected = ref('')
 const profile = ref(null)
@@ -27,15 +28,26 @@ const taskOperations = new Map()
 const hours = Array.from({ length: 10 }, (_, index) => index + 9)
 const formatHours = minutes => new Intl.NumberFormat('ru', { maximumFractionDigits: 2 }).format(minutes / 60) + ' ч'
 const totalPractice = computed(() => pilots.value.reduce((total, pilot) => total + pilot.practiceMinutes, 0))
-const titles = { pilot: 'Новый ученик', schedule: 'Новое занятие', attendance: 'Отметить занятие', lap: 'Добавить результат' }
+const titles = { pilot: 'Новый ученик', schedule: 'Новое занятие', attendance: 'Отметить занятие',
+  lap: 'Добавить результат', instructor: 'Результат инструктора' }
+const currentLessonPilots = computed(() => pilots.value.filter(pilot => currentLessonIds.value.includes(pilot.id)))
+const otherLapPilots = computed(() => pilots.value.filter(pilot => !currentLessonIds.value.includes(pilot.id)))
+
+function operationId() {
+  // randomUUID требует HTTPS, а getRandomValues доступен и на HTTP.
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 15) | 64
+  bytes[8] = (bytes[8] & 63) | 128
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join('-')
+}
 
 function offset(date, days) {
   const instant = new Date(date + 'T12:00:00Z')
   instant.setUTCDate(instant.getUTCDate() + days)
   return instant.toISOString().slice(0, 10)
 }
-function monday() {
-  const today = moscowDate()
+function monday(today = moscowDate()) {
   return offset(today, -((new Date(today + 'T12:00:00Z').getUTCDay() + 6) % 7))
 }
 const week = ref(monday())
@@ -59,6 +71,16 @@ async function refreshWeek() {
   const requested = week.value
   const data = await request('/staff/schedule?week=' + requested)
   if (week.value === requested) bookings.value = data
+}
+async function refreshCurrentLesson() {
+  const now = new Date()
+  const date = moscowDate(now)
+  const hour = Number(new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit', hourCycle: 'h23', timeZone: 'Europe/Moscow',
+  }).format(now))
+  const schedule = await request('/staff/schedule?week=' + monday(date))
+  currentLessonIds.value = schedule.find(slot => slot.date === date && slot.startHour === hour)
+    ?.bookings.map(booking => booking.pilotId) ?? []
 }
 async function refreshCompetition() {
   try { competition.value = await request('/staff/challenges/current') }
@@ -85,18 +107,21 @@ watch(week, () => attempt(refreshWeek))
 watch(selected, () => { taskResults.value = {} })
 watch([tab, selected], () => {
   if (tab.value === 'training') attempt(refreshProfile)
-  if (tab.value === 'monthly') attempt(refreshCompetition)
+  if (tab.value === 'monthly') attempt(() => Promise.all([refreshCompetition(), refreshCurrentLesson()]))
 })
 
 function open(kind, values = {}) {
   action.value = kind
   const base = kind === 'pilot' ? { firstName: '', lastName: '', login: '', password: '' }
     : kind === 'schedule' ? { pilotId: selected.value, startsOn: week.value, startHour: 16 }
-    : kind === 'attendance' ? { pilotId: selected.value, date: moscowDate(), minutes: 60, operationId: crypto.randomUUID() }
-    : { pilotId: selected.value, time: '', challengeId: competition.value?.challenge.id, operationId: crypto.randomUUID() }
+    : kind === 'attendance' ? { pilotId: selected.value, date: moscowDate(), minutes: 60, operationId: operationId() }
+    : kind === 'instructor' ? { time: competition.value.instructorLapMilliseconds
+      ? lapTime(competition.value.instructorLapMilliseconds) : '', challengeId: competition.value.challenge.id }
+    : { pilotId: '', time: '', challengeId: competition.value?.challenge.id, operationId: operationId() }
   draft.value = { ...base, ...values }
   formError.value = ''
   dialog.value.showModal()
+  if (kind === 'lap') refreshCurrentLesson().catch(reason => { error.value = reason.message })
 }
 
 async function submit() {
@@ -121,6 +146,10 @@ async function submit() {
         await write('POST', '/staff/challenges/' + input.challengeId + '/laps',
           { pilotId: input.pilotId, milliseconds: parseLap(input.time), operationId: input.operationId })
         break
+      case 'instructor':
+        await write('PUT', '/staff/challenges/' + input.challengeId + '/instructor-lap',
+          { milliseconds: input.time ? parseLap(input.time) : null })
+        break
     }
     dialog.value.close()
     notice.value = 'Сохранено.'
@@ -128,7 +157,7 @@ async function submit() {
       if (kind === 'attendance') await refreshWeek()
       if (kind === 'schedule') await refreshWeek()
       else await refreshPilots()
-      if (kind === 'lap') await refreshCompetition()
+      if (kind === 'lap' || kind === 'instructor') await refreshCompetition()
       if (tab.value === 'training') await refreshProfile()
     })
   } catch (reason) {
@@ -154,7 +183,7 @@ async function saveResult(task) {
   const key = pilotId + '/' + task.id
   let operation = taskOperations.get(key)
   if (!operation || operation.result !== result) {
-    operation = { id: crypto.randomUUID(), result }
+    operation = { id: operationId(), result }
     taskOperations.set(key, operation)
   }
   try {
@@ -242,10 +271,10 @@ async function unlock(taskId) {
             <div class="appointment-head"><strong>{{ timeLabel(slot.startHour) }} — {{ timeLabel(slot.startHour + 1) }}</strong>
               <small :aria-label="'Занято мест: ' + slot.bookings.length + ' из 2'">{{ slot.bookings.length }}/2</small></div>
             <div v-for="booking in slot.bookings" :key="booking.id" class="appointment-student">
-              <div class="appointment-student-info"><button class="student-link" @click="selected = booking.pilotId; tab = 'training'">{{ name(booking.pilotId) }}</button><small>Еженедельно</small></div>
+              <div class="appointment-student-info"><button type="button" class="student-link" @click="selected = booking.pilotId; tab = 'training'">{{ name(booking.pilotId) }}</button><small>Еженедельно</small></div>
               <span v-if="booking.minutes">{{ booking.minutes }} мин · отмечено</span>
-              <button v-else-if="day <= moscowDate()" class="quiet" @click="open('attendance', { pilotId: booking.pilotId, date: day, bookingId: booking.id })">Отметить посещение</button>
               <div class="appointment-actions">
+                <button v-if="!booking.minutes && day <= moscowDate()" type="button" class="quiet appointment-attendance" @click="open('attendance', { pilotId: booking.pilotId, date: day, bookingId: booking.id })">Отметить посещение</button>
                 <button type="button" class="lesson-icon" :aria-label="'Пропустить занятие: ' + name(booking.pilotId)" title="Пропустить занятие" @click="changeBooking(booking, day, 'skip')">
                   <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M8 5l8 7-8 7V5zM19 5v14" /></svg>
                 </button>
@@ -321,8 +350,22 @@ async function unlock(taskId) {
   <template v-else>
     <div v-if="competition" class="stack">
       <ChallengeCard :challenge="competition.challenge" />
-      <StandingsTable :standings="competition.standings" title="Результаты испытания">
-        <template #actions><button class="primary" :disabled="!pilots.length" @click="open('lap')">+ Записать время</button></template>
+      <section v-if="currentLessonPilots.length" class="panel content-panel" aria-label="Сейчас на занятии">
+        <strong>Сейчас на занятии</strong>
+        <div class="actions">
+          <button v-for="pilot in currentLessonPilots" :key="pilot.id" type="button" class="quiet"
+            @click="open('lap', { pilotId: pilot.id })">{{ name(pilot.id) }}</button>
+        </div>
+      </section>
+      <StandingsTable :standings="competition.standings" :instructor-lap="competition.instructorLapMilliseconds" title="Результаты испытания">
+        <template #actions>
+          <div class="actions">
+            <button class="primary" :disabled="!pilots.length" @click="open('lap')">+ Записать время</button>
+            <button class="quiet" @click="open('instructor')">
+              {{ competition.instructorLapMilliseconds ? 'Изменить ориентир' : '+ Результат инструктора' }}
+            </button>
+          </div>
+        </template>
       </StandingsTable>
     </div>
     <p v-else class="panel empty">Испытание месяца ещё не опубликовано. Администратор может создать его вручную или настроить пары для жеребьёвки.</p>
@@ -340,10 +383,22 @@ async function unlock(taskId) {
         <label>Логин <input v-model.trim="draft.login" autocomplete="off" minlength="3" maxlength="64" required></label>
         <label>Первоначальный пароль <input v-model="draft.password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required></label>
       </template>
+      <template v-else-if="action === 'instructor'">
+        <label>Время круга инструктора <input v-model.trim="draft.time" placeholder="1:39.500"></label>
+        <p class="muted small">Оставьте поле пустым, чтобы убрать ориентир из таблицы.</p>
+      </template>
       <template v-else>
         <label>Ученик <select :disabled="!!draft.bookingId" v-model="draft.pilotId" required>
           <option value="" disabled>Выберите ученика</option>
-          <option v-for="pilot in pilots" :key="pilot.id" :value="pilot.id">{{ name(pilot.id) }}</option>
+          <template v-if="action === 'lap' && currentLessonPilots.length">
+            <optgroup label="Сейчас на занятии">
+              <option v-for="pilot in currentLessonPilots" :key="pilot.id" :value="pilot.id">{{ name(pilot.id) }}</option>
+            </optgroup>
+            <optgroup v-if="otherLapPilots.length" label="Остальные ученики">
+              <option v-for="pilot in otherLapPilots" :key="pilot.id" :value="pilot.id">{{ name(pilot.id) }}</option>
+            </optgroup>
+          </template>
+          <option v-else v-for="pilot in pilots" :key="pilot.id" :value="pilot.id">{{ name(pilot.id) }}</option>
         </select></label>
         <template v-if="action === 'schedule'">
           <label>Дата первого занятия <input v-model="draft.startsOn" type="date" required></label>

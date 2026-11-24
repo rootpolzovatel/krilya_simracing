@@ -28,6 +28,7 @@ internal static class CompetitionEndpoints
 
         var staff = app.MapGroup("/api/staff").RequireAuthorization("Staff");
         staff.MapPost("/challenges/{id:guid}/laps", RecordLapAsync);
+        staff.MapPut("/challenges/{id:guid}/instructor-lap", SaveInstructorLapAsync);
         staff.MapGet("/challenges/current", (KrylyaDb db, TimeProvider clock, CancellationToken ct) =>
             GetResultsAsync(MonthAt(clock.GetUtcNow()), false, db, ct));
 
@@ -88,9 +89,13 @@ internal static class CompetitionEndpoints
         if (removeCar || removeTrack)
             await db.ChallengeImages.Where(i => i.ChallengeId == id
                 && ((removeCar && i.Kind == "car") || (removeTrack && i.Kind == "track"))).ExecuteDeleteAsync(ct);
+        var simulator = input.Simulator.Trim();
+        var rules = input.Rules.Trim();
         var updated = challenge with
         {
-            Simulator = input.Simulator.Trim(), Car = car, Track = track, Rules = input.Rules.Trim(),
+            Simulator = simulator, Car = car, Track = track, Rules = rules,
+            InstructorLapMilliseconds = removeCar || removeTrack || simulator != challenge.Simulator || rules != challenge.Rules
+                ? null : challenge.InstructorLapMilliseconds,
             UpdatedBy = AuthEndpoints.Actor(user), UpdatedAt = now
         };
         db.Entry(challenge).CurrentValues.SetValues(updated);
@@ -125,6 +130,23 @@ internal static class CompetitionEndpoints
         return Results.Created(uri: (string?)null, value: lap);
     }
 
+    private static async Task<IResult> SaveInstructorLapAsync(Guid id, InstructorLapRequest input, KrylyaDb db,
+        TimeProvider clock, CancellationToken ct)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        await MonthlyCompetition.LockAsync(db, ct);
+        var challenge = await db.Challenges.FindAsync([id], ct);
+        if (challenge is null)
+            return Results.NotFound();
+        if (challenge.FinalizedAt != null || challenge.Month != MonthAt(clock.GetUtcNow()))
+            return Results.Conflict(new { message = "Результат инструктора можно менять только в текущем испытании." });
+
+        challenge.InstructorLapMilliseconds = input.Milliseconds;
+        await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
+        return Results.NoContent();
+    }
+
     private static async Task<IResult> GetResultsAsync(DateOnly month, bool publicView, KrylyaDb db, CancellationToken ct, bool archivedOnly = false)
     {
         var challenge = await db.Challenges.SingleOrDefaultAsync(c => c.Month == month && (!archivedOnly || c.FinalizedAt != null), ct);
@@ -148,7 +170,7 @@ internal static class CompetitionEndpoints
             carImageUrl = imageKinds.Contains("car") ? $"/api/public/challenges/{challenge.Id}/images/car" : null,
             trackImageUrl = imageKinds.Contains("track") ? $"/api/public/challenges/{challenge.Id}/images/track" : null
         };
-        return Results.Ok(new { challenge = card, closesAt, standings });
+        return Results.Ok(new { challenge = card, closesAt, standings, challenge.InstructorLapMilliseconds });
     }
 
     private static async Task<List<Standing>> GetOpenStandingsAsync(Guid challengeId, DateTimeOffset closesAt,
@@ -195,3 +217,7 @@ public sealed record ChallengeRequest(DateOnly Month, [Required, StringLength(12
     [Required, StringLength(5000)] string Rules);
 
 public sealed record LapRequest(Guid PilotId, [Range(1, 86_400_000)] int Milliseconds, Guid? OperationId = null);
+
+public sealed record InstructorLapRequest(
+    [property: System.Text.Json.Serialization.JsonRequired]
+    [Range(1, 86_400_000)] int? Milliseconds);

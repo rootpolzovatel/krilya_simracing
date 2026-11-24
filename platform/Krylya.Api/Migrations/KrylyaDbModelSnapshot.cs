@@ -150,6 +150,9 @@ namespace Krylya.Api.Migrations
                     b.Property<DateTimeOffset?>("FinalizedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int?>("InstructorLapMilliseconds")
+                        .HasColumnType("integer");
+
                     b.Property<DateOnly>("Month")
                         .HasColumnType("date");
 

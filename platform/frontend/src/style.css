@@ -1614,9 +1614,8 @@ main {
 }
 
 .appointment-student {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   padding: 12px;
 }
@@ -1626,18 +1625,34 @@ main {
 }
 
 .appointment-student-info {
-  min-inline-size: 0;
-  flex: 1;
+  overflow-wrap: anywhere;
 }
 
-.appointment-student-info span {
-  margin: 0 0 5px;
+.appointment-student-info .student-link {
+  display: block;
+  text-align: start;
 }
 
 .appointment-actions {
   display: flex;
-  flex-shrink: 0;
-  gap: 2px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.appointment-attendance {
+  inline-size: 100%;
+  white-space: normal;
+}
+
+.results tbody .instructor-lap > * {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.results .instructor-lap small {
+  display: block;
+  color: var(--muted);
 }
 
 .lesson-icon {

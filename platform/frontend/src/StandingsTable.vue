@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { lapTime } from './api.js'
 const props = defineProps({
   standings: { type: Array, required: true },
+  instructorLap: Number,
   searchable: Boolean,
   title: { type: String, default: 'Результаты пилотов' },
 })
@@ -26,6 +27,12 @@ const rows = computed(() => {
       <table>
         <thead><tr><th scope="col">МЕСТО</th><th scope="col">ПИЛОТ</th><th scope="col">ЛУЧШИЙ КРУГ</th><th scope="col">ОТРЫВ, С</th></tr></thead>
         <tbody>
+          <tr v-if="instructorLap" class="instructor-lap">
+            <td></td>
+            <th scope="row">Инструктор <small>Вне зачёта</small></th>
+            <td class="time">{{ lapTime(instructorLap) }}</td>
+            <td></td>
+          </tr>
           <tr v-for="(row, index) in rows" :key="row.pilotId ?? index" :class="{ first: row.place === 1 }">
             <td class="rank">{{ String(row.place).padStart(2, '0') }}</td>
             <td><span class="avatar" aria-hidden="true">{{ row.firstName[0] }}{{ row.lastName[0] }}</span>{{ row.firstName }} {{ row.lastName }}</td>

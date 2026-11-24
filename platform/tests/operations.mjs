@@ -44,6 +44,15 @@ assert.equal((await coach('/staff/schedule?week='+date))[0].bookings[0].minutes,
 const challenge = await admin('/admin/challenges','POST',{month:today.slice(0,7)+'-01', simulator:'Test',car:'Car',track:'Track',rules:'Time'},201)
 const lap = await coach('/staff/challenges/'+challenge.id+'/laps','POST',{ pilotId:pilot.id, milliseconds:70000 },201)
 assert.equal((await guest('/public/leaderboard')).standings.length,0)
+const instructorLap = '/staff/challenges/' + challenge.id + '/instructor-lap'
+await guest(instructorLap, 'PUT', { milliseconds: 65000 }, 401)
+await coach(instructorLap, 'PUT', { milliseconds: 0 }, 400)
+await coach(instructorLap, 'PUT', { milliseconds: 65000 }, 204)
+assert.equal((await guest('/public/leaderboard')).instructorLapMilliseconds, 65000)
+const standingsWithInstructor = await coach('/staff/challenges/current')
+assert.deepEqual(standingsWithInstructor.standings.map(row => [row.place, row.milliseconds, row.gapMilliseconds]), [[1, 70000, 0]])
+await coach(instructorLap, 'PUT', { milliseconds: null }, 204)
+assert.equal((await guest('/public/leaderboard')).instructorLapMilliseconds, null)
 const cancel='/admin/pilots/'+pilot.id+'/void/lap/'+lap.id
 await coach(cancel,'PUT',{reason:'Опечатка'},403)
 await admin(cancel,'PUT',{reason:'Опечатка'},204)

@@ -68,7 +68,7 @@ export async function logout() {
 }
 
 export const write = (method, path, body) => request(path, { method, body })
-export const moscowDate = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Moscow' }).format(new Date())
+export const moscowDate = (date = new Date()) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Moscow' }).format(date)
 
 export function monthLabel(month) {
   const date = new Date(month + 'T12:00:00Z')

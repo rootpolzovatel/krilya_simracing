@@ -152,6 +152,7 @@ public sealed record RankRule(Guid Id, int Order, string Title, int MinimumCompl
 
 public sealed record Challenge(Guid Id, DateOnly Month, string Simulator, string Car, string Track, string Rules)
 {
+    public int? InstructorLapMilliseconds { get; set; }
     public Guid? SourcePairId { get; init; }
     public DateTimeOffset? FinalizedAt { get; set; }
     public Guid? UpdatedBy { get; set; }
