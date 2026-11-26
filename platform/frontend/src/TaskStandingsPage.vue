@@ -55,12 +55,17 @@ watch(() => props.taskId, load, { immediate: true })
       <table>
         <thead><tr><th scope="col">Место</th><th scope="col">Пилот</th><th scope="col">{{ resultLabel }}</th></tr></thead>
         <tbody>
+          <tr v-if="board.resultType === 'time' && board.instructorLapMilliseconds != null" class="instructor-lap">
+            <td class="rank">—</td>
+            <td>Инструктор</td>
+            <td class="time">{{ lapTime(board.instructorLapMilliseconds) }}</td>
+          </tr>
           <tr v-for="(row, index) in board.standings" :key="index" :class="{ first: row.place === 1 }">
             <td class="rank">{{ row.place }}</td>
             <td>{{ row.name }} <strong v-if="row.isSelf">(ты)</strong></td>
             <td class="time">{{ formatResult(row.result) }}</td>
           </tr>
-          <tr v-if="!board.standings.length"><td colspan="3" class="empty">Пока нет подтверждённых результатов.</td></tr>
+          <tr v-if="!board.standings.length && board.instructorLapMilliseconds == null"><td colspan="3" class="empty">Пока нет подтверждённых результатов.</td></tr>
         </tbody>
       </table>
     </div>

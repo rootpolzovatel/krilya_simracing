@@ -10,9 +10,13 @@ const props = defineProps({
 const search = ref('')
 const rows = computed(() => {
   const query = search.value.trim().toLocaleLowerCase('ru')
-  return props.standings.filter(person =>
+  const pilots = props.standings.filter(person =>
     [person.firstName + ' ' + person.lastName, person.lastName + ' ' + person.firstName]
       .some(name => name.toLocaleLowerCase('ru').includes(query)))
+  return props.instructorLap == null ? pilots : [
+    { pilotId: 'instructor', firstName: 'Инструктор', lastName: '', milliseconds: props.instructorLap, instructor: true },
+    ...pilots,
+  ]
 })
 </script>
 
@@ -27,17 +31,11 @@ const rows = computed(() => {
       <table>
         <thead><tr><th scope="col">МЕСТО</th><th scope="col">ПИЛОТ</th><th scope="col">ЛУЧШИЙ КРУГ</th><th scope="col">ОТРЫВ, С</th></tr></thead>
         <tbody>
-          <tr v-if="instructorLap" class="instructor-lap">
-            <td></td>
-            <th scope="row">Инструктор <small>Вне зачёта</small></th>
-            <td class="time">{{ lapTime(instructorLap) }}</td>
-            <td></td>
-          </tr>
-          <tr v-for="(row, index) in rows" :key="row.pilotId ?? index" :class="{ first: row.place === 1 }">
-            <td class="rank">{{ String(row.place).padStart(2, '0') }}</td>
-            <td><span class="avatar" aria-hidden="true">{{ row.firstName[0] }}{{ row.lastName[0] }}</span>{{ row.firstName }} {{ row.lastName }}</td>
+          <tr v-for="(row, index) in rows" :key="row.pilotId ?? index" :class="{ first: row.place === 1, 'instructor-lap': row.instructor }">
+            <td class="rank">{{ row.instructor ? '—' : String(row.place).padStart(2, '0') }}</td>
+            <td><span class="avatar" aria-hidden="true">{{ row.firstName[0] }}{{ row.lastName[0] }}</span>{{ [row.firstName, row.lastName].filter(Boolean).join(' ') }}</td>
             <td class="time">{{ lapTime(row.milliseconds) }}</td>
-            <td class="delta">{{ row.place === 1 ? 'Лидер' : '+' + (row.gapMilliseconds / 1000).toFixed(3) }}</td>
+            <td class="delta">{{ row.instructor ? '—' : row.place === 1 ? 'Лидер' : '+' + (row.gapMilliseconds / 1000).toFixed(3) }}</td>
           </tr>
           <tr v-if="!rows.length"><td colspan="4" class="empty">{{ standings.length ? 'Пилоты не найдены' : 'В зачёте пока нет результатов.' }}</td></tr>
         </tbody>

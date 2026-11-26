@@ -571,6 +571,9 @@ namespace Krylya.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<long?>("InstructorLapMilliseconds")
+                        .HasColumnType("bigint");
+
                     b.Property<string>("Normative")
                         .IsRequired()
                         .HasColumnType("text");

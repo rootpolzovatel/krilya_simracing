@@ -116,6 +116,7 @@ public sealed record InstructorBenchmark(Guid Id, DateOnly Month, string Instruc
 public sealed record TrainingTask(Guid Id, int Stage, int Order, string Title, string Instructions, string ResultType,
     string Normative, int? PointsPrecision = null)
 {
+    public long? InstructorLapMilliseconds { get; init; }
     public Guid? UpdatedBy { get; init; }
     public DateTimeOffset? UpdatedAt { get; init; }
 }

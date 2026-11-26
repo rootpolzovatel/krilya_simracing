@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import ChallengeCard from './ChallengeCard.vue'
+import StaffPilotOptions from './StaffPilotOptions.vue'
 import StandingsTable from './StandingsTable.vue'
 import TrainingLessons from './TrainingLessons.vue'
 import { lapTime, monthLabel, moscowDate, parseLap, request, session, write } from './api.js'
@@ -14,7 +15,18 @@ const bookings = ref([])
 const currentLessonIds = ref([])
 const competition = ref(null)
 const selected = ref('')
+const instructorSelected = ref(false)
+const trainingSelection = computed({
+  get: () => instructorSelected.value ? 'instructor' : selected.value || 'instructor',
+  set: value => {
+    instructorSelected.value = value === 'instructor'
+    if (!instructorSelected.value) selected.value = value
+  },
+})
+const instructorTraining = computed(() => trainingSelection.value === 'instructor')
+const instructorTasks = ref(null)
 const profile = ref(null)
+const trainingTasks = computed(() => instructorTraining.value ? instructorTasks.value : profile.value?.tasks)
 const history = ref([])
 const busy = ref(false)
 const error = ref('')
@@ -31,7 +43,7 @@ const totalPractice = computed(() => pilots.value.reduce((total, pilot) => total
 const titles = { pilot: 'Новый ученик', schedule: 'Новое занятие', attendance: 'Отметить занятие',
   lap: 'Добавить результат', instructor: 'Результат инструктора' }
 const currentLessonPilots = computed(() => pilots.value.filter(pilot => currentLessonIds.value.includes(pilot.id)))
-const otherLapPilots = computed(() => pilots.value.filter(pilot => !currentLessonIds.value.includes(pilot.id)))
+const otherPilots = computed(() => pilots.value.filter(pilot => !currentLessonIds.value.includes(pilot.id)))
 
 function operationId() {
   // randomUUID требует HTTPS, а getRandomValues доступен и на HTTP.
@@ -89,14 +101,22 @@ async function refreshCompetition() {
     competition.value = null
   }
 }
-async function refreshProfile() {
-  const id = selected.value
-  profile.value = null
-  history.value = []
-  if (!id) return
+async function refreshProfile(reset = true) {
+  const id = trainingSelection.value
+  if (reset) {
+    profile.value = null
+    instructorTasks.value = null
+    history.value = []
+  }
+  if (id === 'instructor') {
+    const tasks = await request('/staff/training/instructor')
+    if (trainingSelection.value === id)
+      instructorTasks.value = tasks.map(task => ({ task, open: true, attempts: [] }))
+    return
+  }
   const data = await request('/staff/pilots/' + id + '/training')
   const events = await request('/staff/pilots/' + id + '/history')
-  if (selected.value === id) { profile.value = data; history.value = events }
+  if (trainingSelection.value === id) { profile.value = data; history.value = events }
 }
 async function attempt(work) {
   error.value = ''
@@ -104,9 +124,12 @@ async function attempt(work) {
 }
 onMounted(() => attempt(() => Promise.all([refreshPilots(), refreshWeek(), refreshCompetition()])))
 watch(week, () => attempt(refreshWeek))
-watch(selected, () => { taskResults.value = {} })
-watch([tab, selected], () => {
+watch(trainingSelection, () => { taskResults.value = {} })
+watch([tab, trainingSelection], () => {
   if (tab.value === 'training') attempt(refreshProfile)
+})
+watch(tab, () => {
+  if (tab.value === 'training') attempt(refreshCurrentLesson)
   if (tab.value === 'monthly') attempt(() => Promise.all([refreshCompetition(), refreshCurrentLesson()]))
 })
 
@@ -178,21 +201,27 @@ async function changeBooking(booking, date, change) {
 
 async function saveResult(task) {
   busy.value = true
-  const pilotId = selected.value
+  const pilotId = trainingSelection.value
   const result = taskResults.value[task.id]
-  const key = pilotId + '/' + task.id
-  let operation = taskOperations.get(key)
-  if (!operation || operation.result !== result) {
-    operation = { id: operationId(), result }
-    taskOperations.set(key, operation)
-  }
   try {
     await attempt(async () => {
-      await write('POST', '/staff/pilots/' + pilotId + '/attempts',
-        { taskId: task.id, result, operationId: operation.id })
-      taskOperations.delete(key)
-      if (selected.value === pilotId) delete taskResults.value[task.id]
-      await refreshProfile()
+      if (pilotId === 'instructor') {
+        await write('PUT', '/staff/training/instructor/' + task.id, { result })
+      } else {
+        const key = pilotId + '/' + task.id
+        let operation = taskOperations.get(key)
+        if (!operation || operation.result !== result) {
+          operation = { id: operationId(), result }
+          taskOperations.set(key, operation)
+        }
+        await write('POST', '/staff/pilots/' + pilotId + '/attempts',
+          { taskId: task.id, result, operationId: operation.id })
+        taskOperations.delete(key)
+      }
+      if (trainingSelection.value === pilotId) {
+        delete taskResults.value[task.id]
+        await refreshProfile(false)
+      }
     })
   } finally { busy.value = false }
 }
@@ -300,7 +329,7 @@ async function unlock(taskId) {
       <table class="pilot-table"><thead><tr><th scope="col">УЧЕНИК</th><th scope="col">ЭТАП</th><th scope="col">ПРАКТИКА</th>
         <th scope="col">КРУГ МЕСЯЦА</th></tr></thead>
         <tbody><tr v-for="pilot in pilots" :key="pilot.id">
-          <td><button type="button" class="student-link" :aria-label="'Учебный путь: ' + name(pilot.id)" @click="selected = pilot.id; tab = 'training'">{{ name(pilot.id) }}</button></td>
+          <td><button type="button" class="student-link" :aria-label="'Учебный путь: ' + name(pilot.id)" @click="trainingSelection = pilot.id; tab = 'training'">{{ name(pilot.id) }}</button></td>
           <td class="student-stage"><template v-if="pilot.stage">{{ String(pilot.stage).padStart(2, '0') }} · {{ pilot.stageTitle ?? 'Этап ' + pilot.stage }}
             <small>{{ pilot.stageCompleted }} / {{ pilot.stageTotal }} заданий</small></template><span v-else>—</span></td>
           <td class="number">{{ formatHours(pilot.practiceMinutes) }}</td>
@@ -311,24 +340,36 @@ async function unlock(taskId) {
   </section>
 
   <section v-else-if="tab === 'training'" aria-label="Программа обучения">
-    <div v-if="pilots.length" class="learning-toolbar">
-      <label class="learning-picker">Ученик
-        <select v-model="selected"><option v-for="pilot in pilots" :key="pilot.id" :value="pilot.id">{{ name(pilot.id) }}</option></select>
+    <section v-if="currentLessonPilots.length" class="panel content-panel" aria-label="Сейчас на занятии">
+      <strong>Сейчас на занятии</strong>
+      <div class="actions">
+        <button v-for="pilot in currentLessonPilots" :key="pilot.id" type="button" class="quiet"
+          :aria-pressed="trainingSelection === pilot.id" @click="trainingSelection = pilot.id">{{ name(pilot.id) }}</button>
+      </div>
+    </section>
+    <div class="learning-toolbar">
+      <label class="learning-picker">Ученик или инструктор
+        <select v-model="trainingSelection">
+          <StaffPilotOptions :current="currentLessonPilots" :others="otherPilots" />
+          <option value="instructor">Инструктор</option>
+        </select>
       </label>
       <button v-if="profile?.tasks.some(entry => entry.canUnlock)" class="quiet" :disabled="busy"
         @click="unlock(profile.tasks.find(entry => entry.canUnlock).task.id)">Открыть следующее задание</button>
     </div>
-    <p v-else class="panel empty">Добавьте ученика, чтобы открыть учебный путь.</p>
-    <template v-if="profile">
-      <div class="section-title">
+    <template v-if="trainingTasks">
+      <div v-if="profile" class="section-title">
         <h2>Этап {{ profile.stage ? String(profile.stage).padStart(2, '0') : '—' }}<span v-if="profile.stageTitle"> · {{ profile.stageTitle }}</span></h2>
         <span class="tag">{{ profile.tasks.filter(entry => entry.completed).length }} / {{ profile.tasks.length }} заданий</span>
       </div>
-      <TrainingLessons :tasks="profile.tasks" v-slot="{ entry }">
+      <TrainingLessons :tasks="trainingTasks" :instructor="instructorTraining" :key="trainingSelection" v-slot="{ entry }">
         <form v-if="entry.open" class="task-result-form" @submit.prevent="saveResult(entry.task)">
           <label>Фактический результат <input v-model.trim="taskResults[entry.task.id]" required maxlength="1000" :placeholder="entry.task.resultType === 'time' ? '1:39.500' : undefined"></label>
           <div class="actions"><button class="quiet" :disabled="busy">Сохранить результат</button></div>
         </form>
+        <p v-if="instructorTraining && entry.task.instructorLapMilliseconds != null" class="attempt">
+          Сохранённое время: <strong class="time">{{ lapTime(entry.task.instructorLapMilliseconds) }}</strong>
+        </p>
         <div v-for="result in entry.attempts" :key="result.id" class="attempt heading-actions">
           <span><strong>{{ result.result }}</strong> · {{ result.passed === null ? 'Ожидает решения' : result.passed ? 'Выполнено' : 'Не выполнено' }}</span>
           <div v-if="result.passed === null" class="actions">
@@ -337,7 +378,7 @@ async function unlock(taskId) {
           </div>
         </div>
       </TrainingLessons>
-      <details class="panel content-panel"><summary>История ученика</summary>
+      <details v-if="profile" class="panel content-panel"><summary>История ученика</summary>
         <article v-for="event in history" :key="event.kind + event.id" class="rule">
           <strong>{{ ({lap: 'Круг', attempt: 'Учебная попытка'})[event.kind] ?? event.kind }}</strong>
           <p>{{ event.detail }}</p><small>{{ new Date(event.at).toLocaleString('ru', { timeZone: 'Europe/Moscow' }) }} МСК · {{ event.actor }}</small>
@@ -390,15 +431,8 @@ async function unlock(taskId) {
       <template v-else>
         <label>Ученик <select :disabled="!!draft.bookingId" v-model="draft.pilotId" required>
           <option value="" disabled>Выберите ученика</option>
-          <template v-if="action === 'lap' && currentLessonPilots.length">
-            <optgroup label="Сейчас на занятии">
-              <option v-for="pilot in currentLessonPilots" :key="pilot.id" :value="pilot.id">{{ name(pilot.id) }}</option>
-            </optgroup>
-            <optgroup v-if="otherLapPilots.length" label="Остальные ученики">
-              <option v-for="pilot in otherLapPilots" :key="pilot.id" :value="pilot.id">{{ name(pilot.id) }}</option>
-            </optgroup>
-          </template>
-          <option v-else v-for="pilot in pilots" :key="pilot.id" :value="pilot.id">{{ name(pilot.id) }}</option>
+          <StaffPilotOptions v-if="action === 'lap'" :current="currentLessonPilots" :others="otherPilots" />
+          <StaffPilotOptions v-else :others="pilots" />
         </select></label>
         <template v-if="action === 'schedule'">
           <label>Дата первого занятия <input v-model="draft.startsOn" type="date" required></label>

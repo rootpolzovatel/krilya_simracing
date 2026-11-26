@@ -73,6 +73,16 @@ const standings = '/pilot/tasks/' + race.id + '/standings'
 await guest(standings, 'GET', undefined, 401)
 await coach(standings, 'GET', undefined, 403)
 assert.deepEqual((await learner(standings)).standings, [])
+const instructorTasks = '/staff/training/instructor'
+const instructorTime = instructorTasks + '/' + race.id
+await learner(instructorTime, 'PUT', { result: '1:37.500' }, 403)
+await coach(instructorTime, 'PUT', { result: '1:60.000' }, 400)
+await coach(instructorTasks + '/' + task.id, 'PUT', { result: '1:37.500' }, 404)
+await coach(instructorTime, 'PUT', { result: '1:38.500' }, 204)
+await coach(instructorTime, 'PUT', { result: '1:37.500' }, 204)
+assert.deepEqual((await coach(instructorTasks)).map(t => [t.id, t.instructorLapMilliseconds]), [[race.id, 97500]])
+assert.equal((await learner(standings)).instructorLapMilliseconds, 97500)
+assert.equal((await learner('/pilot/me')).tasks.find(t => t.task.id === race.id).completed, false)
 await coach(path + '/tasks/' + race.id + '/unlock', 'PUT', undefined, 204)
 for (const [result, passed] of [['1:42.500', true], ['1:40.125', true], ['1:39.000', null], ['1:38.000', false]]) {
   const run = await coach(path + '/attempts', 'POST', { taskId: race.id, result }, 201)

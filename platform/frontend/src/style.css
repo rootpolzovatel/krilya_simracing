@@ -1647,12 +1647,6 @@ main {
 
 .results tbody .instructor-lap > * {
   background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.results .instructor-lap small {
-  display: block;
-  color: var(--muted);
 }
 
 .lesson-icon {
@@ -2131,6 +2125,8 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .lesson-body .attempt + .attempt { margin-block-start: 12px; }
 .lesson-body .attempt summary { display: list-item; list-style: revert; padding: 4px 0; color: var(--accent); font-size: .75rem; }
 .attempt { margin-block-start: 12px; border-block-start: 1px solid var(--line); padding-block-start: 8px; }
+.lesson-body .attempt .actions { align-items: stretch; }
+.lesson-body .attempt .actions > button { margin-block-start: 0; }
 .stack > * + * { margin-block-start: 24px; }
 .lesson-icon svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .student-link {

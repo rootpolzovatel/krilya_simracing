@@ -15,6 +15,9 @@ internal static partial class TrainingEndpoints
         staff.MapGet("/pilots/{id:guid}/training", GetPilotAsync);
         staff.MapPost("/pilots/{id:guid}/attendance", AttendAsync);
         staff.MapPost("/pilots/{id:guid}/attempts", RecordAsync);
+        staff.MapGet("/training/instructor", async (KrylyaDb db, CancellationToken ct) =>
+            await db.Tasks.Where(t => t.ResultType == "time").OrderBy(t => t.Stage).ThenBy(t => t.Order).ToListAsync(ct));
+        staff.MapPut("/training/instructor/{taskId:guid}", SaveInstructorLapAsync);
         staff.MapPut("/pilots/{id:guid}/tasks/{taskId:guid}/unlock", UnlockAsync);
         staff.MapPut("/attempts/{id:guid}/decision", DecideAsync);
         ScheduleEndpoints.MapSchedule(staff);
@@ -80,7 +83,26 @@ internal static partial class TrainingEndpoints
                 isSelf = entry.Id == viewerId
             });
         }
-        return Results.Ok(new { task.Title, task.Normative, task.ResultType, standings });
+        return Results.Ok(new
+        {
+            task.Title, task.Normative, task.ResultType,
+            InstructorLapMilliseconds = task.ResultType == "time" ? task.InstructorLapMilliseconds : null,
+            standings
+        });
+    }
+
+    private static async Task<IResult> SaveInstructorLapAsync(Guid taskId, InstructorTaskResultRequest input,
+        KrylyaDb db, CancellationToken ct)
+    {
+        var task = await db.Tasks.FindAsync([taskId], ct);
+        if (task is null || task.ResultType != "time")
+            return Results.NotFound();
+        if (!IsValidResult(task, input.Result.Trim(), out var milliseconds))
+            return Results.BadRequest(new { message = "Укажите время в формате 1:39.500." });
+
+        var updated = await db.Tasks.Where(t => t.Id == taskId && t.ResultType == "time")
+            .ExecuteUpdateAsync(set => set.SetProperty(t => t.InstructorLapMilliseconds, milliseconds), ct);
+        return updated == 1 ? Results.NoContent() : Results.NotFound();
     }
 
     private static decimal? ReadStandingValue(string type, string result, long? milliseconds) => type switch
@@ -282,7 +304,10 @@ internal static partial class TrainingEndpoints
         var task = new TrainingTask(existing?.Id ?? Guid.NewGuid(), input.Stage, input.Order, input.Title.Trim(),
             input.Instructions.Trim(), input.ResultType, input.Normative.Trim(),
             input.ResultType == "points" ? input.PointsPrecision ?? 2 : null)
-        { UpdatedBy = AuthEndpoints.Actor(user), UpdatedAt = clock.GetUtcNow() };
+        {
+            UpdatedBy = AuthEndpoints.Actor(user), UpdatedAt = clock.GetUtcNow(),
+            InstructorLapMilliseconds = existing?.InstructorLapMilliseconds
+        };
         if (existing is null)
             db.Add(task);
         else
@@ -356,6 +381,7 @@ internal static partial class TrainingEndpoints
 
 public sealed record AttendanceRequest(Guid OperationId, DateOnly Date, [Range(1, 1440)] int Minutes = 60, Guid? BookingId = null);
 public sealed record TaskResultRequest(Guid TaskId, [Required, StringLength(1000)] string Result, Guid? OperationId = null);
+public sealed record InstructorTaskResultRequest([Required, StringLength(1000)] string Result);
 public sealed record StageNameRequest([Required, StringLength(100)] string Title);
 public sealed record DecisionRequest([property: System.Text.Json.Serialization.JsonRequired] bool Passed);
 public sealed record TaskRequest([Range(1, 1000)] int Stage, [Range(1, 10000)] int Order,
